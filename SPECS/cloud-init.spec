@@ -7,7 +7,7 @@
 
 Name:           cloud-init
 Version:        0.7.5
-Release:        10%{?dist}.1
+Release:        10%{?dist}.2
 Summary:        Cloud instance init scripts
 
 Group:          System Environment/Base
@@ -16,7 +16,9 @@ URL:            http://launchpad.net/cloud-init
 Source0:        https://launchpad.net/cloud-init/trunk/%{version}/+download/%{name}-%{version}.tar.gz
 Source1:        cloud-init-centos.cfg
 Source2:        cloud-init-README.rhel
+%if 0%{?rhel} >= 7
 Source3:        cloud-init-tmpfiles.conf
+%endif # if >= C7
 
 # Patches managed with rdopkg, using github.com/larsks/cloud-init as integration
 # repository.
@@ -39,7 +41,9 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildRequires:  python-devel
 BuildRequires:  python-setuptools
+%if 0%{?rhel} >= 7
 BuildRequires:  systemd-units
+%endif # if > C7
 %ifarch %{?ix86} x86_64 ia64
 Requires:       dmidecode
 %endif
@@ -49,19 +53,32 @@ Requires:       libselinux-python
 Requires:       net-tools
 Requires:       policycoreutils-python
 Requires:       procps
+Requires:       python-argparse
 Requires:       python-boto
 Requires:       python-cheetah
 Requires:       python-configobj
+Requires:       python-jsonpatch
+# python-oauth is required by the MAAS datasource
+Requires:       python-oauth
 Requires:       python-prettytable
 Requires:       python-requests
+# python-serial is required by the SmartOS datasource but doesn't exist in el6
+%if 0%{?rhel} >= 7
+Requires:       python-serial
+%endif
 Requires:       PyYAML
-Requires:       python-jsonpatch
 Requires:       rsyslog
 Requires:       shadow-utils
 Requires:       /usr/bin/run-parts
+%if 0%{?rhel} >= 7
 Requires(post):   systemd-units
 Requires(preun):  systemd-units
 Requires(postun): systemd-units
+%else # < C7
+Requires(post):   chkconfig
+Requires(preun):  chkconfig
+Requires(postun): initscripts
+%endif # if > C7
 
 %description
 Cloud-init is a set of init scripts for cloud instances.  Cloud instances
@@ -97,27 +114,39 @@ rm -r $RPM_BUILD_ROOT%{python_sitelib}/tests
 
 mkdir -p $RPM_BUILD_ROOT/var/lib/cloud
 
+%if 0%{?rhel} >= 7
 # /run/cloud-init needs a tmpfiles.d entry
 mkdir -p $RPM_BUILD_ROOT/run/cloud-init
-mkdir -p         $RPM_BUILD_ROOT/%{_tmpfilesdir}
+mkdir -p $RPM_BUILD_ROOT/%{_tmpfilesdir}
 cp -p %{SOURCE3} $RPM_BUILD_ROOT/%{_tmpfilesdir}/%{name}.conf
+%endif # if >= C7
 
 # We supply our own config file since our software differs from Ubuntu's.
 cp -p %{SOURCE1} $RPM_BUILD_ROOT/%{_sysconfdir}/cloud/cloud.cfg
+%if 0%{?rhel} < 7
+sed -i -e 's/, systemd-journal//' $RPM_BUILD_ROOT/%{_sysconfdir}/cloud/cloud.cfg
+%endif if < C7
 
 mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}/rsyslog.d
 cp -p tools/21-cloudinit.conf $RPM_BUILD_ROOT/%{_sysconfdir}/rsyslog.d/21-cloudinit.conf
 
+%if 0%{?rhel} >= 7
 # Install the systemd bits
 mkdir -p         $RPM_BUILD_ROOT/%{_unitdir}
 cp -p systemd/*  $RPM_BUILD_ROOT/%{_unitdir}
-
+%else # < C7
+# Install the init scripts
+mkdir -p $RPM_BUILD_ROOT/%{_initrddir}
+install -p -m 755 sysvinit/debian/* $RPM_BUILD_ROOT/%{_initrddir}/
+install -p -m 755 sysvinit/redhat/* $RPM_BUILD_ROOT/%{_initrddir}/
+%endif # if >= C7
 
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
 
+%if 0%{?rhel} >= 7
 %post
 if [ $1 -eq 1 ] ; then
     # Initial installation
@@ -141,10 +170,38 @@ fi
 %postun
 /bin/systemctl daemon-reload >/dev/null 2>&1 || :
 # One-shot services -> no need to restart
+%else # < C7
+%post
+if [ $1 -eq 1 ] ; then
+    # Initial installation
+    # Enabled by default per "runs once then goes away" exception
+    for svc in init-local init config final; do
+        chkconfig --add cloud-$svc
+        chkconfig cloud-$svc on
+    done
+fi
+
+%preun
+if [ $1 -eq 0 ] ; then
+    # Package removal, not upgrade
+    for svc in init-local init config final; do
+        chkconfig cloud-$svc off
+        chkconfig --del cloud-$svc
+    done
+    # One-shot services -> no need to stop
+fi
+
+%postun
+# One-shot services -> no need to restart
+%endif # if >= C7
 
 
 %files
+%if 0%{?rhel} >= 7
 %license LICENSE
+%else # < C7
+%doc LICENSE
+%endif # >= C7
 %doc ChangeLog TODO README.rhel
 %config(noreplace) %{_sysconfdir}/cloud/cloud.cfg
 %dir               %{_sysconfdir}/cloud/cloud.cfg.d
@@ -152,23 +209,30 @@ fi
 %doc               %{_sysconfdir}/cloud/cloud.cfg.d/README
 %dir               %{_sysconfdir}/cloud/templates
 %config(noreplace) %{_sysconfdir}/cloud/templates/*
+%{python_sitelib}/*
+%{_libexecdir}/%{name}
+%{_bindir}/cloud-init*
+%doc %{_datadir}/doc/%{name}
+%dir /var/lib/cloud
+%if 0%{?rhel} >= 7
 %{_unitdir}/cloud-config.service
 %{_unitdir}/cloud-config.target
 %{_unitdir}/cloud-final.service
 %{_unitdir}/cloud-init-local.service
 %{_unitdir}/cloud-init.service
 %{_tmpfilesdir}/%{name}.conf
-%{python_sitelib}/*
-%{_libexecdir}/%{name}
-%{_bindir}/cloud-init*
-%doc %{_datadir}/doc/%{name}
 %dir /run/cloud-init
-%dir /var/lib/cloud
+%else # < C7
+%{_initrddir}/cloud-*
+%endif # if >= C7
 
 %config(noreplace) %{_sysconfdir}/rsyslog.d/21-cloudinit.conf
 
 
 %changelog
+* Fri Oct 17 2014 Juerg Haefliger <juerg.haefliger@hp.com> 0.7.5-10<dist>.2
+- Add support for C6 and sysvrc
+
 * Wed Sep 10 2014 Karanbir Singh <kbsingh@centos.org> 0.7.5-10.el7.centos.1
 - Bump release to prevent flapping with EPEL package
 
