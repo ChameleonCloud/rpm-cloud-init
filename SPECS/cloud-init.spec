@@ -7,7 +7,7 @@
 
 Name:           cloud-init
 Version:        0.7.5
-Release:        10%{?dist}.1
+Release:        10%{?dist}.2
 Summary:        Cloud instance init scripts
 
 Group:          System Environment/Base
@@ -30,6 +30,8 @@ Patch1001: cloud-init-centos-opennebula.patch
 Patch1002: cloud-init-centos-hostnamefix.patch
 Patch1003: cloud-init-centos-opennebula-requiretty.patch
 Patch1004: cloud-init-centos-cloudstack-urlhandling.patch
+# Patch1005 generated with: bzr diff -c 1011.1.1 -p1 | filterdiff -x "*DataSourceConfigDrive.py" | tail +3
+Patch1005: cloud-init-centos-openstack-vendordatafix.patch
 
 # Deal with noarch -> arch
 # https://bugzilla.redhat.com/show_bug.cgi?id=1067089
@@ -80,6 +82,7 @@ ssh keys and to let the user run various scripts.
 %patch1002 -p1
 %patch1003 -p1
 %patch1004 -p1
+%patch1005 -p1
 
 cp -p %{SOURCE2} README.rhel
 

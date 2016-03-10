@@ -1,0 +1,114 @@
+=== modified file 'cloudinit/sources/DataSourceOpenStack.py'
+--- old/cloudinit/sources/DataSourceOpenStack.py	2014-09-10 20:46:11 +0000
++++ new/cloudinit/sources/DataSourceOpenStack.py	2014-09-11 01:17:40 +0000
+@@ -140,13 +140,13 @@
+         self.version = results['version']
+         self.files.update(results.get('files', {}))
+ 
+-        # if vendordata includes 'cloud-init', then read that explicitly
+-        # for cloud-init (for namespacing).
+         vd = results.get('vendordata')
+-        if isinstance(vd, dict) and 'cloud-init' in vd:
+-            self.vendordata_raw = vd['cloud-init']
+-        else:
+-            self.vendordata_raw = vd
++        self.vendordata_pure = vd
++        try:
++            self.vendordata_raw = openstack.convert_vendordata_json(vd)
++        except ValueError as e:
++            LOG.warn("Invalid content in vendor-data: %s", e)
++            self.vendordata_raw = None
+ 
+         return True
+ 
+
+=== modified file 'cloudinit/sources/helpers/openstack.py'
+--- old/cloudinit/sources/helpers/openstack.py	2014-09-10 20:00:00 +0000
++++ new/cloudinit/sources/helpers/openstack.py	2014-09-11 01:17:40 +0000
+@@ -459,3 +459,28 @@
+         return ec2_utils.get_instance_metadata(ssl_details=self.ssl_details,
+                                                timeout=self.timeout,
+                                                retries=self.retries)
++
++
++def convert_vendordata_json(data, recurse=True):
++    """ data: a loaded json *object* (strings, arrays, dicts).
++    return something suitable for cloudinit vendordata_raw.
++
++    if data is:
++       None: return None
++       string: return string
++       list: return data
++             the list is then processed in UserDataProcessor
++       dict: return convert_vendordata_json(data.get('cloud-init'))
++    """
++    if not data:
++        return None
++    if isinstance(data, (str, unicode, basestring)):
++        return data
++    if isinstance(data, list):
++        return copy.deepcopy(data)
++    if isinstance(data, dict):
++        if recurse is True:
++            return convert_vendordata_json(data.get('cloud-init'),
++                                           recurse=False)
++        raise ValueError("vendordata['cloud-init'] cannot be dict")
++    raise ValueError("Unknown data type for vendordata: %s" % type(data))
+
+=== modified file 'tests/unittests/test_datasource/test_openstack.py'
+--- old/tests/unittests/test_datasource/test_openstack.py	2014-09-10 20:00:00 +0000
++++ new/tests/unittests/test_datasource/test_openstack.py	2014-09-11 01:17:40 +0000
+@@ -19,6 +19,7 @@
+ import copy
+ import json
+ import re
++import unittest
+ 
+ from StringIO import StringIO
+ 
+@@ -256,7 +257,8 @@
+         self.assertEquals(EC2_META, ds_os.ec2_metadata)
+         self.assertEquals(USER_DATA, ds_os.userdata_raw)
+         self.assertEquals(2, len(ds_os.files))
+-        self.assertEquals(VENDOR_DATA, ds_os.vendordata_raw)
++        self.assertEquals(VENDOR_DATA, ds_os.vendordata_pure)
++        self.assertEquals(ds_os.vendordata_raw, None)
+ 
+     @hp.activate
+     def test_bad_datasource_meta(self):
+@@ -314,3 +316,34 @@
+         found = ds_os.get_data()
+         self.assertFalse(found)
+         self.assertIsNone(ds_os.version)
++
++
++class TestVendorDataLoading(unittest.TestCase):
++    def cvj(self, data):
++        return openstack.convert_vendordata_json(data)
++
++    def test_vd_load_none(self):
++        # non-existant vendor-data should return none
++        self.assertIsNone(self.cvj(None))
++
++    def test_vd_load_string(self):
++        self.assertEqual(self.cvj("foobar"), "foobar")
++
++    def test_vd_load_list(self):
++        data = [{'foo': 'bar'}, 'mystring', list(['another', 'list'])]
++        self.assertEqual(self.cvj(data), data)
++
++    def test_vd_load_dict_no_ci(self):
++        self.assertEqual(self.cvj({'foo': 'bar'}), None)
++
++    def test_vd_load_dict_ci_dict(self):
++        self.assertRaises(ValueError, self.cvj,
++                          {'foo': 'bar', 'cloud-init': {'x': 1}})
++
++    def test_vd_load_dict_ci_string(self):
++        data = {'foo': 'bar', 'cloud-init': 'VENDOR_DATA'}
++        self.assertEqual(self.cvj(data), data['cloud-init'])
++
++    def test_vd_load_dict_ci_list(self):
++        data = {'foo': 'bar', 'cloud-init': ['VD_1', 'VD_2']}
++        self.assertEqual(self.cvj(data), data['cloud-init'])
+
